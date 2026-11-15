@@ -1,0 +1,13 @@
+{
+  "name": "telebirr-proxy",
+  "version": "1.0.0",
+  "description": "A locked-down forwarding proxy for the Telebirr receipt server",
+  "main": "app.js",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node app.js",
+    "test": "node --test test/proxy.test.js"
+  }
+}

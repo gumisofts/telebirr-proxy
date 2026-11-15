@@ -3,36 +3,34 @@
 A small forwarding proxy for the Telebirr receipt server. It passes an allowed request to one
 fixed upstream and streams the answer back. No dependencies: one file, `app.js`.
 
-It is locked down on purpose:
+By default it is **open**: anyone who knows the address can use it. What it will never do is
+fetch something else:
 
 - The upstream host is fixed in the configuration. A caller cannot make it fetch anything else.
-- Every request needs the key. A wrong or missing key gets a plain 404.
 - Only the listed paths and methods are forwarded (by default `GET`/`HEAD` under `/receipt/`).
-- Cookies, `Authorization`, the key and the caller's IP headers are never sent upstream.
-- Logs hold the time, caller IP, method, status and duration. Never the body, the query string,
-  the key or the receipt number.
+- Cookies, `Authorization` and the caller's IP headers are never sent upstream.
+- Logs hold the time, caller IP, method, status and duration. Never the body, the query string
+  or the receipt number.
+
+To restrict who may call it, set `PROXY_KEY`, `ALLOWED_IPS`, or both (see "Restricting it").
+While it is open, anyone can run receipt lookups from your server's IP address: keep an eye on
+the log, and restrict it if you see callers you do not know.
 
 ## Configuration (environment variables)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PROXY_KEY` | required | The shared secret, at least 24 characters |
+| `PROXY_KEY` | empty | Optional shared secret, at least 24 characters. Empty = no key asked for |
 | `UPSTREAM_URL` | `https://transactioninfo.ethiotelecom.et` | Where requests are forwarded |
 | `ALLOWED_PATHS` | `/receipt/` | Path prefixes that are forwarded (comma separated) |
 | `ALLOWED_METHODS` | `GET,HEAD` | Methods that are forwarded |
-| `ALLOWED_IPS` | empty | Only these caller IPs (comma separated). Empty = any caller with the key |
+| `ALLOWED_IPS` | empty | Optional: only these caller IPs (comma separated). Empty = any IP |
 | `UPSTREAM_TIMEOUT_MS` | `20000` | Give up on the upstream after this long |
 | `UPSTREAM_VERIFY_TLS` | `true` | `false` only if the upstream certificate cannot be verified |
 | `TRUST_FORWARDED_FOR` | `true` | Read the caller IP from `X-Forwarded-For` (right for Plesk, where nginx is in front) |
 | `MAX_BODY_BYTES` | `1048576` | Largest request body |
 | `MAX_CONCURRENT` | `50` | Requests in flight at once; more get 503 |
 | `LOG_REQUESTS` | `true` | One line per request |
-
-Make a key:
-
-```
-node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
-```
 
 ## Deploy on Plesk
 
@@ -44,7 +42,7 @@ node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
    - Application root: the folder with `app.js`
    - Application startup file: `app.js`
    - Application mode: `production`
-4. Under **Custom environment variables**, add `PROXY_KEY` (and any others from the table).
+4. Optional: under **Custom environment variables**, add any settings from the table.
 5. Press **Enable Node.js**, then **Restart App** after every change.
 
 There is nothing to `npm install`.
@@ -53,30 +51,41 @@ Check it:
 
 ```
 curl https://tb.example.com/healthz
-curl -H "X-Proxy-Key: <key>" https://tb.example.com/receipt/SOMEID
+curl https://tb.example.com/receipt/SOMEID
 ```
 
 ## Calling it
 
-Two ways to present the key:
-
-- Header: `X-Proxy-Key: <key>` with the normal path, `/receipt/<id>`.
-- In the path, for a client that can only be given a base URL: `/k/<key>/receipt/<id>`.
-
-For a backend that builds the receipt URL as `<base>/<transaction id>`, set its base URL to:
+Use the proxy's address in place of the receipt server's. For a backend that builds the receipt
+URL as `<base>/<transaction id>`, set its base URL to:
 
 ```
-https://tb.example.com/k/<key>/receipt
+https://tb.example.com/receipt
 ```
 
-With the key in the path, the web server's own access log on the Plesk host will contain it.
-Either use `ALLOWED_IPS` as well, or turn off access logging for this domain.
+## Restricting it
+
+Either or both:
+
+- `ALLOWED_IPS=1.2.3.4,5.6.7.8`: only your backend servers' addresses. Nothing changes for the
+  callers. If the proxy's domain is behind a CDN, the proxy sees the CDN's addresses, so use a key.
+- `PROXY_KEY=<key>`: callers must present it, as the header `X-Proxy-Key: <key>` or in the path,
+  `/k/<key>/receipt/<id>` (base URL `https://tb.example.com/k/<key>/receipt`). With the key in the
+  path, the web server's own access log on the Plesk host will contain it.
+
+Make a key:
+
+```
+node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
+```
+
+A caller that is refused gets a plain 404.
 
 ## Answers the proxy itself gives
 
 | Status | Meaning |
 |---|---|
-| 404 | Wrong or missing key, or the caller's IP is not allowed |
+| 404 | A key or IP list is set and the caller does not pass it |
 | 403 | The path is not in `ALLOWED_PATHS` |
 | 405 | The method is not in `ALLOWED_METHODS` |
 | 413 | The body is larger than `MAX_BODY_BYTES` |
@@ -95,6 +104,6 @@ serves one upstream; run a second instance for a second server.
 ## Run and test locally
 
 ```
-PROXY_KEY=<key> node app.js          # listens on PORT, default 3000
+node app.js          # listens on PORT, default 3000
 npm test
 ```

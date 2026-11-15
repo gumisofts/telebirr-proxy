@@ -3,7 +3,8 @@
  * Forwarding proxy for the Telebirr receipt server.
  *
  * It does one thing: pass an allowed request to ONE fixed upstream and stream the answer back.
- * It is not an open proxy: the caller cannot choose the host, and must present the key.
+ * The caller can never choose the host. Who may call it is up to the configuration: anyone (the
+ * default), only callers with PROXY_KEY, only ALLOWED_IPS, or both.
  *
  * No dependencies. Runs under Plesk's Node.js manager (Passenger) or plain `node app.js`.
  * Configuration is environment variables only; see README.md.
@@ -20,10 +21,11 @@ function loadConfig(env = process.env) {
   const upstream = new URL(env.UPSTREAM_URL || 'https://transactioninfo.ethiotelecom.et');
   const config = {
     upstream,
-    // The shared secret. Callers send it as the `X-Proxy-Key` header or as the first part of the
-    // path: /k/<key>/receipt/ABC123 (for clients that can only be given a URL).
+    // Optional shared secret. Empty = no key is asked for. When set, callers send it as the
+    // `X-Proxy-Key` header or as the first part of the path: /k/<key>/receipt/ABC123 (for clients
+    // that can only be given a URL).
     key: env.PROXY_KEY || '',
-    // Optional: only these caller IPs (comma separated). Empty = any IP that has the key.
+    // Optional: only these caller IPs (comma separated). Empty = any IP.
     allowedIps: list(env.ALLOWED_IPS),
     // Only paths starting with one of these are forwarded.
     allowedPaths: list(env.ALLOWED_PATHS || '/receipt/'),
@@ -40,7 +42,8 @@ function loadConfig(env = process.env) {
     log: String(env.LOG_REQUESTS || 'true').toLowerCase() !== 'false',
   };
   if (!['http:', 'https:'].includes(upstream.protocol)) throw new Error('UPSTREAM_URL must be http or https');
-  if (config.key.length < 24) throw new Error('PROXY_KEY is required and must be at least 24 characters');
+  if (config.key && config.key.length < 24) throw new Error('PROXY_KEY must be at least 24 characters');
+  config.open = !config.key && config.allowedIps.length === 0;
   return config;
 }
 
@@ -116,7 +119,9 @@ function createServer(config = loadConfig()) {
     }
     // Wrong or missing key, or a caller not on the list: answer 404, as if nothing were here.
     const given = req.headers['x-proxy-key'] || pathKey;
-    if (!given || !sameKey(given, config.key) || (config.allowedIps.length && !config.allowedIps.includes(ip))) {
+    const keyOk = !config.key || (given && sameKey(given, config.key));
+    const ipOk = !config.allowedIps.length || config.allowedIps.includes(ip);
+    if (!keyOk || !ipOk) {
       finish(404, 'refused');
       return send(res, 404, 'not found');
     }
@@ -203,6 +208,7 @@ if (require.main === module) {
   server.headersTimeout = 15000;
   server.listen(process.env.PORT || 3000, () => {
     console.log(`telebirr-proxy: forwarding ${config.allowedMethods.join(',')} ${config.allowedPaths.join(',')} to ${config.upstream.origin}`);
+    if (config.open) console.warn('telebirr-proxy: OPEN, anyone can call it. Set PROXY_KEY or ALLOWED_IPS to restrict it.');
   });
   process.on('SIGTERM', () => server.close(() => process.exit(0)));
 }

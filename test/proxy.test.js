@@ -114,6 +114,25 @@ test('an upstream that hangs gives 504, one that is down gives 502', async () =>
   proxy.closeAllConnections();
 });
 
+test('with no key and no IP list it is open, but still only forwards allowed paths', async () => {
+  const t = await setup({ PROXY_KEY: '' });
+  assert.equal((await fetch(`${t.url}/receipt/OPEN1`)).status, 200);
+  assert.equal(t.seen[0].url, '/receipt/OPEN1');
+  assert.equal((await fetch(`${t.url}/admin`)).status, 403);
+  assert.equal((await fetch(`${t.url}/receipt/A`, { method: 'POST', body: 'x' })).status, 405);
+  assert.equal(loadConfig({}).open, true);
+  assert.equal(loadConfig({ ALLOWED_IPS: '10.0.0.5' }).open, false);
+  t.close();
+});
+
+test('an IP list alone restricts it without a key', async () => {
+  const t = await setup({ PROXY_KEY: '', ALLOWED_IPS: '10.0.0.5', TRUST_FORWARDED_FOR: 'true' });
+  const call = (xff) => fetch(`${t.url}/receipt/A`, { headers: { 'x-forwarded-for': xff } });
+  assert.equal((await call('10.0.0.5')).status, 200);
+  assert.equal((await call('8.8.8.8')).status, 404);
+  t.close();
+});
+
 test('health check needs no key; config refuses a weak key', async () => {
   const t = await setup();
   assert.equal((await fetch(`${t.url}/healthz`)).status, 200);
